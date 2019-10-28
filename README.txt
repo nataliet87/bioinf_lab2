@@ -7,7 +7,7 @@ Steps:
 
 3. completed in aligning_lab2.sh
 
-4. Aligment data processed into .bam and .bedgraph files in 
+4. Aligment data processed into .bam and .bedgraph files in samtools_lab2.sh
     ***THIS PART STILL NEEDED!!: (visualize expression over the following loci: IFN1B, IFIT2, and ISG15)
 
 
