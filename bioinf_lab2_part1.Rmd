@@ -1,0 +1,429 @@
+---
+title: "Bioinf_lab2"
+author: "Natalie Thornton"
+date: "10/20/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# setting working directory
+knitr::opts_knit$set(root.dir ="/Users/Natalie/Desktop/sackler_fall2019/Bioinf_lab2/bedgraph_files")
+```
+
+
+```{r}
+library(data.table)
+library(Gviz)
+library(GenomicFeatures)
+library(org.Hs.eg.db)
+library(rtracklayer)
+```
+
+
+```{r}
+
+## list files that will be read in
+forward_files <- list('./forward_BU1.bedgraph', './forward_BU2.bedgraph', './forward_BU3.bedgraph', './forward_Ds12H1.bedgraph', './forward_Ds12H2.bedgraph', './forward_Ds12H3.bedgraph')
+reverse_files <- list('./reverse_BU1.bedgraph', './reverse_BU2.bedgraph', './reverse_BU3.bedgraph', './reverse_Ds12H1.bedgraph', './reverse_Ds12H2.bedgraph', './reverse_Ds12H3.bedgraph')
+both_strand_files <- list('./BU1.bedgraph', './BU2.bedgraph', './BU3.bedgraph', './Ds12H1.bedgraph', './Ds12H2.bedgraph', './Ds12H3.bedgraph')
+
+### Read in bedgraph files (and specify column headers)
+for (i in 1:6) {
+  assign(paste0("forward", i), fread(forward_files[[i]], col.names = c('chromosome', 'start', 'end', 'value')))
+  assign(paste0("reverse", i), fread(reverse_files[[i]], col.names = c('chromosome', 'start', 'end', 'value')))
+  assign(paste0("both_strands", i), fread(both_strand_files[[i]], col.names = c('chromosome', 'start', 'end', 'value')))
+
+}
+
+
+# place files in lists so they can be accessed iteratively:
+forward_read = list(forward1, forward2, forward3, forward4, forward5, forward6)
+reverse_read = list(reverse1, reverse2, reverse3, reverse4, reverse5, reverse6)
+both_read = list(both_strands1, both_strands2, both_strands3, both_strands4, both_strands5, both_strands6)
+```
+
+
+```{r}
+### Specify genome name, chromosome number, and mapping co-ordinates (for each gene of interest: IFNB1, IFIT2, and ISG15):
+hg38 = "hg38"
+Chr = c("chr9", "chr10", "chr1")
+start_loc = c(21077104, 89301216, 1013360)
+end_loc = c(21077942, 89310009, 1014647)
+
+# specify conditions:
+gene_of_interest = c("IFNB1", "IFIT2", "ISG15")
+conditions = c("buffer-treated control; replicates 1 and 3", "buffer-treated control; replicates 1-3",
+               "dsDNA-treated; replicates 1 and 3", "dsDNA-treated; replicates 1-3")
+```
+
+
+
+
+**CONTROLS:**
+
+FOR INFB1:
+```{r}
+g = 1
+
+  ### Generate genome and ideogram tracks
+gtrack<-GenomeAxisTrack(col="black") 
+itrack <- IdeogramTrack(genome = hg38, chromosome = Chr[g])
+
+  ### Read in UCSC genes and track 
+ucscGenes <- UcscTrack(genome = hg38, table="ncbiRefSeq", track = 'NCBI RefSeq', trackType="GeneRegionTrack",
+                       chromosome=Chr[g], rstarts = "exonStarts", rends = "exonEnds",
+                       gene = "name", symbol = 'name', transcript = "name",
+                       strand = "strand", stacking = 'pack', showID = T, geneSymbol = T)
+
+z <- ranges(ucscGenes)
+mcols(z)$symbol <- mapIds(org.Hs.eg.db, gsub("\\.[1-9]$", "", mcols(z)$symbol), "SYMBOL","REFSEQ")
+ucscGenes2 <- ucscGenes
+ranges(ucscGenes2) <- z
+
+
+
+ ## Make empty list of data tracks:
+tracks = vector("list", 9)
+tracks[1] = itrack
+tracks[8] = gtrack
+tracks[9] = ucscGenes2
+
+ ## set/reset counter
+a = 1
+
+ ## list replicates to plot
+replicates = list(1,3)
+
+
+for (i in replicates) {
+    ### Determine the maximium depth value within the specified mapping co-ordinates
+  ChrData<-both_read[[i]][both_read[[i]]$chromosome==Chr[g],]
+  ChrData2<-ChrData[ChrData$start>start_loc[g]]
+  ChrData3<-ChrData2[ChrData2$end<end_loc[g],]
+  maxV<-max(ChrData3$value)
+
+    ### Generate dataTracks - type ?DataTrack to see options
+  assign(paste0("dataTrack", a), DataTrack(range = forward_read[[i]], type = "a", chromosome=Chr[g], 
+                                           genome = hg38, name = paste("Forward\n Rep", i), rotation.title=0,
+                                           fontsize.title=8, showAxis=FALSE,
+                                           fill = "orchid3", col = "black", 
+                                           ylim=c(0,maxV)))
+  
+    # add datatrack to track list and up counter:
+  tracks[a+1] = eval(parse(text = paste0("dataTrack", a)))
+  a = a + 1
+  
+  assign(paste0("dataTrack", a), DataTrack(range = reverse_read[[i]], type = "a", chromosome=Chr[g], 
+                                           genome = hg38, name = paste("Reverse\n Rep", i), rotation.title=0,
+                                           fontsize.title=8, showAxis=FALSE, 
+                                           fill = "springgreen3", col = "black", 
+                                           ylim=c(maxV,0)))
+
+    # add datatrack to track list and up counter:  
+  tracks[a+1] = eval(parse(text = paste0("dataTrack", a)))
+  a = a + 1
+  
+  assign(paste0("dataTrack", a), DataTrack(range = both_read[[i]], type = "a", chromosome=Chr[g], 
+                                           genome = hg38, name = paste("Both strands\n Rep", i), rotation.title=0,
+                                           fontsize.title=8, showAxis=FALSE,
+                                           fill = "royalblue3", col = "black"))
+  
+    # add datatrack to track list and up counter:
+  tracks[a+1] = eval(parse(text = paste0("dataTrack", a)))
+  a = a + 1
+}
+
+paste(conditions[1], "expression of IFNB1")
+
+## GENERATE PLOT
+plotTracks(tracks, collapseTranscripts = "meta", transcriptAnnotation = "symbol", 
+           from = start_loc[g], to = end_loc[g], main = paste("INFB1 exp in ", conditions[1]),
+           cex.main=1, sizes=c(0.05,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.05), 
+           type="hist", col.histogram=NA, cex.title=1, cex.axis=1, title.width=1.2)
+
+
+
+```
+
+
+
+FOR IFIT2, and ISG15:
+```{r}
+
+for (g in 2:3) {
+    ### Generate genome and ideogram tracks
+  gtrack<-GenomeAxisTrack(col="black") 
+  itrack <- IdeogramTrack(genome = hg38, chromosome = Chr[g])
+
+   ### Read in UCSC genes and track 
+  ucscGenes <- UcscTrack(genome = hg38, table="ncbiRefSeq", track = 'NCBI RefSeq', trackType="GeneRegionTrack",
+                         chromosome=Chr[g], rstarts = "exonStarts", rends = "exonEnds",
+                         gene = "name", symbol = 'name', transcript = "name",
+                         strand = "strand", stacking = 'pack', showID = T, geneSymbol = T)
+
+  z <- ranges(ucscGenes)
+  mcols(z)$symbol <- mapIds(org.Hs.eg.db, gsub("\\.[1-9]$", "", mcols(z)$symbol), "SYMBOL","REFSEQ")
+  ucscGenes2 <- ucscGenes
+  ranges(ucscGenes2) <- z
+
+  
+    ## Make empty list of data tracks:
+  tracks = vector("list", 12)
+  tracks[1] = itrack
+  tracks[11] = gtrack
+  tracks[12] = ucscGenes2
+
+    ## Set/reset counter
+  a = 1
+
+    ## List replicates to plot:
+  replicates = list(1,2,3)
+
+  
+  for (i in replicates) {
+      ### Determine the maximium depth value within the specified mapping co-ordinates
+    ChrData<-both_read[[i]][both_read[[i]]$chromosome==Chr[g],]
+    ChrData2<-ChrData[ChrData$start>start_loc[g]]
+    ChrData3<-ChrData2[ChrData2$end<end_loc[g],]
+    maxV<-max(ChrData3$value)
+
+     ### Generate dataTracks - type ?DataTrack to see options
+    assign(paste0("dataTrack", a), DataTrack(range = forward_read[[i]], type = "a", chromosome=Chr[g], 
+                                           genome = hg38,
+                                           fill = "orchid3", col = "black",
+                                           name = paste("Forward\n Rep", i), rotation.title=0,
+                                           fontsize.title=8, showAxis=FALSE, 
+                                           ylim=c(0,maxV)))
+    
+        # add datatrack to track list and up counter:
+    tracks[a+1] = eval(parse(text = paste0("dataTrack", a)))
+    a = a + 1
+    print(a)
+  
+    assign(paste0("dataTrack", a), DataTrack(range = reverse_read[[i]], type = "a", chromosome=Chr[g], 
+                                           genome = hg38, 
+                                           fill = "sienna2", col = "black",
+                                           name = paste("Reverse\n Rep", i), rotation.title=0,
+                                           fontsize.title=8, showAxis=FALSE, 
+                                           ylim=c(maxV,0)))
+     
+       # add datatrack to track list and up counter:
+    tracks[a+1] = eval(parse(text = paste0("dataTrack", a)))
+    a = a + 1
+    print(a)
+  
+    assign(paste0("dataTrack", a), DataTrack(range = both_read[[i]], type = "a", chromosome=Chr[g], 
+                                           genome = hg38,
+                                           fill = "royalblue3", col = "black", name = paste("Both strands\n Rep", i), 
+                                           rotation.title=0,
+                                           fontsize.title=8, showAxis=FALSE))
+  
+        # add datatrack to track list and up counter:
+    tracks[a+1] = eval(parse(text = paste0("dataTrack", a)))
+    a = a + 1
+    print(a)
+  }
+  
+  paste(conditions[2], "expression of ", gene_of_interest[g])
+  
+  ## GENERATE PLOT
+  plotTracks(tracks, collapseTranscripts = "meta", transcriptAnnotation = "symbol", 
+           from = start_loc[g], to = end_loc[g], 
+           main = paste(gene_of_interest[g], " exp in ", conditions[2]), cex.main=1,
+           sizes=c(0.05,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.05), 
+           type="hist", col.histogram=NA, cex.title=1, cex.axis=1, title.width=1.2)
+}
+
+
+```
+
+
+
+
+
+
+** dsDNA TREATED:**
+
+FOR IFNB1:
+```{r}
+g = 1
+
+  ### Generate genome and ideogram tracks
+gtrack<-GenomeAxisTrack(col="black") 
+itrack <- IdeogramTrack(genome = hg38, chromosome = Chr[g])
+
+  ### Read in UCSC genes and track 
+ucscGenes <- UcscTrack(genome = hg38, table="ncbiRefSeq", track = 'NCBI RefSeq', trackType="GeneRegionTrack",
+                       chromosome=Chr[g], rstarts = "exonStarts", rends = "exonEnds",
+                       gene = "name", symbol = 'name', transcript = "name",
+                       strand = "strand", stacking = 'pack', showID = T, geneSymbol = T)
+
+z <- ranges(ucscGenes)
+mcols(z)$symbol <- mapIds(org.Hs.eg.db, gsub("\\.[1-9]$", "", mcols(z)$symbol), "SYMBOL","REFSEQ")
+ucscGenes2 <- ucscGenes
+ranges(ucscGenes2) <- z
+
+
+
+ ## Make empty list of data tracks:
+tracks = vector("list", 9)
+tracks[1] = itrack
+tracks[8] = gtrack
+tracks[9] = ucscGenes2
+
+ ## set/reset counter
+a = 1
+
+ ## list replicates to plot
+replicates = list(4,6)
+
+
+for (i in replicates) {
+    ### Determine the maximium depth value within the specified mapping co-ordinates
+  ChrData<-both_read[[i]][both_read[[i]]$chromosome==Chr[g],]
+  ChrData2<-ChrData[ChrData$start>start_loc[g]]
+  ChrData3<-ChrData2[ChrData2$end<end_loc[g],]
+  maxV<-max(ChrData3$value)
+
+    ### Generate dataTracks - type ?DataTrack to see options
+  assign(paste0("dataTrack", a), DataTrack(range = forward_read[[i]], type = "a", chromosome=Chr[g], 
+                                           genome = hg38, name = paste("Forward\n Rep", i-3), rotation.title=0,
+                                           fontsize.title=8, showAxis=FALSE,
+                                           fill = "orchid3", col = "black", 
+                                           ylim=c(0,maxV)))
+  
+    # add datatrack to track list and up counter:
+  tracks[a+1] = eval(parse(text = paste0("dataTrack", a)))
+  a = a + 1
+  
+  assign(paste0("dataTrack", a), DataTrack(range = reverse_read[[i]], type = "a", chromosome=Chr[g], 
+                                           genome = hg38, name =paste("Reverse\n Rep", i-3), rotation.title=0,
+                                           fontsize.title=8, showAxis=FALSE,
+                                           fill = "springgreen3", col = "black", 
+                                           ylim=c(maxV,0)))
+
+    # add datatrack to track list and up counter:  
+  tracks[a+1] = eval(parse(text = paste0("dataTrack", a)))
+  a = a + 1
+  
+  assign(paste0("dataTrack", a), DataTrack(range = both_read[[i]], type = "a", chromosome=Chr[g], 
+                                           genome = hg38, name = paste("Both strands\n Rep", i-3), rotation.title=0,
+                                           fontsize.title=8, showAxis=FALSE,
+                                           fill = "royalblue3", col = "black"))
+  
+    # add datatrack to track list and up counter:
+  tracks[a+1] = eval(parse(text = paste0("dataTrack", a)))
+  a = a + 1
+}
+
+paste(conditions[3], "expression of IFNB1")
+
+## GENERATE PLOT
+plotTracks(tracks, collapseTranscripts = "meta", transcriptAnnotation = "symbol", 
+           from = start_loc[g], to = end_loc[g], 
+           main = paste("INFB1 exp in ", conditions[3]), cex.main=1,
+           sizes=c(0.05,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.05), 
+           type="hist", col.histogram=NA, cex.title=1, cex.axis=1, title.width=1.2)
+
+
+
+```
+
+
+FOR IFIT2, and ISG15:
+```{r}
+
+for (g in 2:3) {
+    ### Generate genome and ideogram tracks
+  gtrack<-GenomeAxisTrack(col="black") 
+  itrack <- IdeogramTrack(genome = hg38, chromosome = Chr[g])
+
+   ### Read in UCSC genes and track 
+  ucscGenes <- UcscTrack(genome = hg38, table="ncbiRefSeq", track = 'NCBI RefSeq', trackType="GeneRegionTrack",
+                         chromosome=Chr[g], rstarts = "exonStarts", rends = "exonEnds",
+                         gene = "name", symbol = 'name', transcript = "name",
+                         strand = "strand", stacking = 'pack', showID = T, geneSymbol = T)
+
+  z <- ranges(ucscGenes)
+  mcols(z)$symbol <- mapIds(org.Hs.eg.db, gsub("\\.[1-9]$", "", mcols(z)$symbol), "SYMBOL","REFSEQ")
+  ucscGenes2 <- ucscGenes
+  ranges(ucscGenes2) <- z
+
+  
+    ## Make empty list of data tracks:
+  tracks = vector("list", 12)
+  tracks[1] = itrack
+  tracks[11] = gtrack
+  tracks[12] = ucscGenes2
+
+    ## Set/reset counter
+  a = 1
+
+    ## List replicates to plot:
+  replicates = list(4,5,6)
+
+  for (i in replicates) {
+      ### Determine the maximium depth value within the specified mapping co-ordinates
+    ChrData<-both_read[[i]][both_read[[i]]$chromosome==Chr[g],]
+    ChrData2<-ChrData[ChrData$start>start_loc[g]]
+    ChrData3<-ChrData2[ChrData2$end<end_loc[g],]
+    maxV<-max(ChrData3$value)
+
+     ### Generate dataTracks - type ?DataTrack to see options
+    assign(paste0("dataTrack", a), DataTrack(range = forward_read[[i]], type = "a", chromosome=Chr[g], 
+                                           genome = hg38,
+                                           fill = "orchid3", col = "black", name = paste("Forward\n Rep", i-3), rotation.title=0,
+                                           fontsize.title=8, showAxis=FALSE,
+                                           ylim=c(0,maxV)))
+  
+        # add datatrack to track list and up counter:
+    tracks[a+1] = eval(parse(text = paste0("dataTrack", a)))
+    a = a + 1
+    print(a)
+  
+    assign(paste0("dataTrack", a), DataTrack(range = reverse_read[[i]], type = "a", chromosome=Chr[g], 
+                                           genome = hg38, 
+                                           fill = "springgreen3", col = "black", 
+                                           name = paste("Reverse\n Rep", i-3), rotation.title=0,
+                                           fontsize.title=8, showAxis=FALSE, 
+                                           ylim=c(maxV,0)))
+     
+       # add datatrack to track list and up counter:
+    tracks[a+1] = eval(parse(text = paste0("dataTrack", a)))
+    a = a + 1
+    print(a)
+  
+    assign(paste0("dataTrack", a), DataTrack(range = both_read[[i]], type = "a", chromosome=Chr[g], 
+                                           genome = hg38,
+                                           fill = "royalblue3", col = "black", name = paste("Both strands\n Rep", i-3), 
+                                           rotation.title=0,fontsize.title=8, showAxis=FALSE))
+  
+        # add datatrack to track list and up counter:
+    tracks[a+1] = eval(parse(text = paste0("dataTrack", a)))
+    a = a + 1
+    print(a)
+  }
+  
+  paste(conditions[4], "expression of ", gene_of_interest[g])
+  
+  ## GENERATE PLOT
+  plotTracks(tracks, collapseTranscripts = "meta", transcriptAnnotation = "symbol", 
+           from = start_loc[g], to = end_loc[g], 
+           main = paste(gene_of_interest[g], " exp in ", conditions[4]), cex.main=1,
+           sizes=c(0.05,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.05), 
+           type="hist", col.histogram=NA, cex.title=1, cex.axis=1, title.width=1.2)
+}
+
+
+```
+
+
+
+
+
+
+
+
+

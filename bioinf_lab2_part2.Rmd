@@ -1,0 +1,487 @@
+---
+title: "bioinf_lab2_part2"
+author: "Natalie Thornton"
+date: "10/27/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#set working directory for reading in libraries:
+setwd("/gpfs/home/nt1598/")
+
+library("Rsubread")
+library("pheatmap")
+library("RColorBrewer")
+library("vsn")
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+library("genefilter")
+library("biomaRt")
+library("IHW")
+library("ggplot2")
+library("DESeq2")
+library("gridExtra")
+```
+
+**STEP 1: featureCounts**
+
+
+```{r}
+## read in .bam files
+input_files = c("./data_bioinf/lab2/bowtie1020/sort_BU1out.bam", "./data_bioinf/lab2/bowtie1020/sort_BU2out.bam",
+                "./data_bioinf/lab2/bowtie1020/sort_BU3out.bam", "./data_bioinf/lab2/bowtie1020/sort_Ds12H1out.bam",
+                "./data_bioinf/lab2/bowtie1020/sort_Ds12H2out.bam","./data_bioinf/lab2/bowtie1020/sort_Ds12H3out.bam")
+
+# read in annotation file
+hg38_gtf_loc = "./Homo_sapiens/UCSC/hg38/Annotation/Genes.gencode/genes.gtf"
+```
+
+
+```{r}
+## set working directory for accessing datasets
+setwd("/gpfs/scratch/nt1598/")
+
+# generate featureCounts, using paired reads and labeling with gene_id
+count_output <- featureCounts(files = input_files, annot.ext = hg38_gtf_loc, isGTFAnnotationFile = TRUE, 
+                              GTF.attrType = "gene_id", isPairedEnd=TRUE, nthreads=4)
+
+```
+
+
+Set up metadata for DESeq2:
+```{r}
+conditions = c("Control", "Control", "Control", "Treatment", "Treatment", "Treatment")
+conditions = as.factor(conditions)
+sample_treatments = cbind(count_output[[3]], conditions)
+```
+
+
+
+Run differnetial gene expression analysis using DESeq2:
+```{r}
+# setup:
+dataset <- DESeqDataSetFromMatrix(
+  countData = count_output[[1]],
+  colData = sample_treatments,
+  design = ~conditions
+  )
+
+# run DESeq and evaluate results:
+processed_dataset <- DESeq(dataset)
+res <- results(processed_dataset)
+```
+
+
+
+
+An exploratory look at the data:
+
+```{r}
+
+## EXPLORATORY PLOTTING:
+rlog <- rlog(dataset)
+par( mfrow = c( 1, 2 ) )
+dataset <- estimateSizeFactors(dataset)
+
+# heteroskedasticity plots:
+plot(log2( 1 + counts(dataset, normalized=TRUE)[ , 1:2] ), pch=16, cex=0.3)
+plot(assay(rlog)[ , 1:2], pch=16, cex=0.3, main = "featureCounts Heteroskedasticity Plots")
+```
+
+
+```{r}
+### Take a look at sample distributions
+sampleDists <- dist( t( assay(rlog) ) )
+sampleDists
+sampleDistMatrix <- as.matrix( sampleDists )
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix, clustering_distance_rows=sampleDists, clustering_distance_cols=sampleDists, col=colors, main = "Similarity of expression profiles across samples; featureCounts")
+```
+
+
+Perform Principle Compenent Analysis:
+```{r}
+
+ntd1 <- normTransform(dataset) 
+##    log2(n+1) transformation, the data that are transformed are read counts normalized for transcript average length and library size
+
+rld1 <- rlog(dataset, blind=FALSE) 
+#the data that are transformed are read counts normalized for transcript average length and library size
+
+vsd1 <- varianceStabilizingTransformation(dataset, blind=FALSE) 
+#the data that are transformed are read counts normalized for transcript average length and library size 
+```
+
+
+```{r}
+
+# plot PCA for ntd1
+pcaData <- plotPCA(ntd1, intgroup = names(colData(dataset)), returnData=TRUE)
+percentVar <- round(100*attr(pcaData, "percentVar"))
+p1 <- ggplot(pcaData, aes(PC1, PC2, color=conditions)) + geom_point(size =3) + 
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) + ylab(paste0("PC2: ", percentVar[2], "% variance")) + 
+  ggtitle("PCA on data normalized for average transcript length; featureCounts")
+
+# plot PCA for vsd1
+pcaData <- plotPCA(vsd1, intgroup = names(colData(dataset)), returnData=TRUE)
+percentVar <- round(100*attr(pcaData, "percentVar"))
+p2 <- ggplot(pcaData, aes(PC1, PC2, color=conditions)) + geom_point(size =3) + 
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) + ylab(paste0("PC2: ", percentVar[2], "% variance")) + 
+  ggtitle("PCA on data VST normalized; featureCounts")
+
+# plot PCA for rld1
+pcaDatar <- plotPCA(rld1, intgroup = names(colData(dataset)), returnData=TRUE)
+percentVarr <- round(100*attr(pcaDatar, "percentVar"))
+p3 <- ggplot(pcaDatar, aes(PC1, PC2, color=conditions)) + geom_point(size =3) + 
+  xlab(paste0("PC1: ", percentVarr[1], "% variance")) + ylab(paste0("PC2: ", percentVarr[2], "% variance")) + 
+  ggtitle("PCA on data rlog normalized; featureCounts")
+
+
+grid.arrange(p1,p2,p3, nrow=3)
+
+```
+
+
+
+
+Generate MA plot:
+```{r}
+plotMA(res, ylim = c(-5, 5), main = "featureCounts MA plot")
+```
+
+
+
+```{r}
+#shrink fold changes in data:
+res <- lfcShrink(processed_dataset, contrast=c("conditions","1","2"))
+
+#average treatment conditions
+baseMeanCtrl = rowMeans(counts(processed_dataset,normalized=TRUE)[,processed_dataset$condition == "Control"])
+baseMeanTreat = rowMeans(counts(processed_dataset,normalized=TRUE)[,processed_dataset$condition == "Treatment"])
+res = cbind(as.data.frame(res), baseMeanCtrl, baseMeanTreat)
+
+#make temporary column of gene_ids, and drop characters after the "."
+tmp=gsub("\\..*","",row.names(res))
+
+# map gene_ids
+res$symbol <- mapIds(org.Hs.eg.db, keys=tmp, column="SYMBOL", keytype="ENSEMBL", multiVals="first") 
+res$entrez <- mapIds(org.Hs.eg.db, keys=tmp, column="ENTREZID", keytype="ENSEMBL", multiVals="first")
+```
+
+
+
+
+Generate histograms of p-values for each gene (second plot filters out genes with low counts)
+```{r}
+hist(res$pvalue, col = "lavender", main = "Treatment vs Ctrl; featureCounts", xlab = "p-values")
+hist(res$pvalue[res$baseMean > 1], breaks = 0:20/20, col = "darkviolet", border = "white", 
+     main = "Treatment vs Ctrl for genes with count >1; featureCounts",
+     xlab = "p-values") #this one states that genes with average count <1 should not be included in the graph
+
+```
+
+
+
+
+```{r}
+### VOLCANO PLOTS
+with(res, plot(log2FoldChange, -log10(pvalue), pch=16, cex=1.5, main="featureCounts Volcano plot", xlim=c(-5,5)))
+with(subset(res, padj>0.01), points(log2FoldChange, -log10(pvalue), pch=16, cex=1.5, col="gray"))
+with(subset(res, padj<0.01 & log2FoldChange>0), points(log2FoldChange, -log10(pvalue), pch=16, cex=1.5, col="red"))
+with(subset(res, padj<0.01 & log2FoldChange<0), points(log2FoldChange, -log10(pvalue), pch=16, cex=1.5, col="blue"))
+### ADD BELLS AND WHISTLES
+pval = 0.01
+abline(h = -log10(pval), col = "black", lty = 2, lwd=4)
+mtext(paste("pval = 0.01", pval), side = 4, at = -log10(pval), cex = 0.8, line = 0.5, las = 1) 
+```
+
+
+```{r}
+### Plot heatmap - top20 variable genes
+rld <- rlog(processed_dataset)
+df <- as.data.frame(colData(processed_dataset))
+topVarGenes <- head( order( rowMeans( assay(rld) ), decreasing=TRUE ), 20 )
+mat <- assay(rld)[topVarGenes, ]
+mat<-mat-rowMeans(mat) ##plot distances from the mean, makes heatmap clearer
+mart <- useMart("ensembl","hsapiens_gene_ensembl") ## assuming human
+gns <- getBM(c("hgnc_symbol","ensembl_gene_id"), "ensembl_gene_id", row.names(mat), mart)
+row.names(mat)[match(gns[,2], row.names(mat))] <- gns[,1]
+pheatmap(mat, cluster_rows=TRUE, show_rownames=TRUE, cluster_cols=TRUE, annotation_col=df, main = "featureCounts Top 20 Variable Genes") 
+```
+
+
+
+```{r}
+mart
+```
+
+
+```{r}
+### Plot heatmap - sorting by padj and log2fc
+# PICK ALL GENES WITH pADJ < 0.05 AND THEN SUBSET FOR THOSE WITH Log2FC > 1 THEN PICK TOP 25 HITS
+subset <- head((subset(res, res$log2FoldChange > 1 & res$padj < 0.00001)), n=25)  
+sigGenes <- rownames(subset)
+rows <- match(sigGenes, row.names(rld))
+mat <- assay(rld)[rows,]
+mat<-mat-rowMeans(mat) ##plot distances from the mean, makes heatmap clearer
+mart <- useMart("ensembl","hsapiens_gene_ensembl") ## assuming human
+gns <- getBM(attributes = c("hgnc_symbol","ensembl_gene_id", "external_gene_name"), 
+             filter = "ensembl_gene_id", value=gsub("\\..*","",row.names(mat)), mart)
+row.names(mat) <- gsub("\\..*","",row.names(mat))
+row.names(mat)[match(gns[,2], row.names(mat))] <- gns[,1]
+df <- as.data.frame(colData(processed_dataset))
+row.names(mat) <- gsub("\\..*","",row.names(mat))
+pheatmap(mat, cluster_rows=TRUE, show_rownames=TRUE, cluster_cols=TRUE, annotation_col=df,
+         main = "featureCounts top 25 genes by adjusted p-value and log2 transformation") 
+```
+
+
+
+
+
+
+
+
+
+**Step 2: Kallisto**
+
+
+```{r}
+library("tximport")
+library("gridExtra")
+
+
+### IMPORT ENSEMBl ANNOTATIONS FOR HUMAN GENOME & GENERATE TWO COLUMN FILE LINKING TRANSCRIPT AND GENE IDS
+mart <- biomaRt::useMart(biomart = "ensembl", dataset =  "hsapiens_gene_ensembl")
+t2g <- biomaRt::getBM(attributes = c("ensembl_transcript_id", "transcript_version", "ensembl_gene_id", "external_gene_name", "description", "transcript_biotype", "refseq_mrna", "refseq_ncrna"), mart = mart)
+t2g$target_id <- paste(t2g$ensembl_transcript_id, t2g$transcript_version, sep=".") # append version number to the transcript ID
+t2g[,c("ensembl_transcript_id","transcript_version")] <- list(NULL) # delete the ensembl transcript ID and transcript version columns
+t2g <- dplyr::rename( t2g, gene_symbol = external_gene_name, full_name = description, biotype = transcript_biotype )
+t2g<-t2g[,c(ncol(t2g),1:(ncol(t2g)-1))]
+```
+
+
+```{r}
+### GENERATE ADDITIONAL OBJECT CONTAINING ONLY PROTEIN CODING GENES [OPTIONAL]
+gb <- getBM(attributes=c("ensembl_gene_id","gene_biotype"), mart=mart)
+gb_coding<-subset(gb, gb$gene_biotype=="protein_coding")
+genes<-gb_coding$ensembl_gene_id
+```
+
+
+
+```{r echo = TRUE, include = FALSE}
+
+# set working directory to access kallisto output files:
+setwd("/gpfs/scratch/nt1598/data_bioinf/lab2/kallisto/")
+
+tx.kallisto=tximport(c("./BU1/abundance.h5", "./BU2/abundance.h5", "./BU3/abundance.h5", 
+                       "./DS1/abundance.h5", "./DS2/abundance.h5", "./DS3/abundance.h5"), 
+                     type = "kallisto",tx2gene = t2g, countsFromAbundance ="no",
+                     ignoreAfterBar=TRUE)
+
+# ### GENERATE TWO COLUMN OUTPUT FORMAT, ROUND VALUES (DESEQ2 DOES NOT LIKE FRACTIONS), AND WRITE TO OUTPUT FILE
+counts<-as.data.frame(tx.kallisto$counts[row.names(tx.kallisto$counts) %in% genes, ])
+len <- as.data.frame(tx.kallisto$len[row.names(tx.kallisto$len) %in% genes, ])
+ids<-rownames(counts)
+
+counts <- round(counts)
+```
+
+
+
+Set up metadata for DESeq2:
+```{r}
+conditions = c("Control", "Control", "Control", "Treatment", "Treatment", "Treatment")
+conditions = as.factor(conditions)
+sample_treatments = cbind(count_output[[3]], conditions)
+```
+
+
+
+Run differnetial gene expression analysis using DESeq2:
+```{r}
+# setup:
+dataset <- DESeqDataSetFromMatrix(
+  countData = counts,
+  colData = sample_treatments,
+  design = ~conditions
+  )
+
+# run DESeq and evaluate results:
+processed_dataset <- DESeq(dataset)
+res <- results(processed_dataset)
+```
+
+
+An exploratory look at the data:
+
+```{r}
+
+## EXPLORATORY PLOTTING:
+rlog <- rlog(dataset)
+par( mfrow = c( 1, 2 ) )
+dataset <- estimateSizeFactors(dataset)
+
+# heteroskedasticity plots:
+plot(log2( 1 + counts(dataset, normalized=TRUE)[ , 1:2] ), pch=16, cex=0.3)
+plot(assay(rlog)[ , 1:2], pch=16, cex=0.3, main = "Kallisto Heteroskedasticity Plots")
+```
+
+
+```{r}
+### Take a look at sample distributions
+sampleDists <- dist( t( assay(rlog) ) )
+sampleDists
+sampleDistMatrix <- as.matrix( sampleDists )
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix, clustering_distance_rows=sampleDists, clustering_distance_cols=sampleDists, col=colors, main = "Similarity of expression profiles across samples, Kallisto")
+```
+
+
+Perform Principle Compenent Analysis:
+```{r}
+
+ntd1 <- normTransform(dataset) 
+##    log2(n+1) transformation, the data that are transformed are read counts normalized for transcript average length and library size
+
+rld1 <- rlog(dataset, blind=FALSE) 
+#the data that are transformed are read counts normalized for transcript average length and library size
+
+vsd1 <- varianceStabilizingTransformation(dataset, blind=FALSE) 
+#the data that are transformed are read counts normalized for transcript average length and library size 
+```
+
+
+```{r}
+library("gridExtra")
+
+# plot PCA for ntd1
+pcaData <- plotPCA(ntd1, intgroup = names(colData(dataset)), returnData=TRUE)
+percentVar <- round(100*attr(pcaData, "percentVar"))
+p1 <- ggplot(pcaData, aes(PC1, PC2, color=conditions)) + geom_point(size =3) + 
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) + ylab(paste0("PC2: ", percentVar[2], "% variance")) + 
+  ggtitle("PCA on data normalized for average transcript length, Kallisto")
+
+# plot PCA for vsd1
+pcaData <- plotPCA(vsd1, intgroup = names(colData(dataset)), returnData=TRUE)
+percentVar <- round(100*attr(pcaData, "percentVar"))
+p2 <- ggplot(pcaData, aes(PC1, PC2, color=conditions)) + geom_point(size =3) + 
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) + ylab(paste0("PC2: ", percentVar[2], "% variance")) + 
+  ggtitle("PCA on data VST normalized, Kallisto")
+
+# plot PCA for rld1
+pcaDatar <- plotPCA(rld1, intgroup = names(colData(dataset)), returnData=TRUE)
+percentVarr <- round(100*attr(pcaDatar, "percentVar"))
+p3 <- ggplot(pcaDatar, aes(PC1, PC2, color=conditions)) + geom_point(size =3) + 
+  xlab(paste0("PC1: ", percentVarr[1], "% variance")) + ylab(paste0("PC2: ", percentVarr[2], "% variance")) + 
+  ggtitle("PCA on data rlog normalized, Kallisto")
+
+
+grid.arrange(p1,p2,p3, nrow=3)
+
+```
+
+
+
+
+Generate MA plot:
+```{r}
+plotMA(res, ylim = c(-5, 5), main = "Kallisto MA plot")
+```
+
+
+
+```{r}
+#shrink fold changes in data:
+res <- lfcShrink(processed_dataset, contrast=c("conditions","1","2"))
+
+#average treatment conditions
+baseMeanCtrl = rowMeans(counts(processed_dataset,normalized=TRUE)[,processed_dataset$condition == "Control"])
+baseMeanTreat = rowMeans(counts(processed_dataset,normalized=TRUE)[,processed_dataset$condition == "Treatment"])
+res = cbind(as.data.frame(res), baseMeanCtrl, baseMeanTreat)
+
+#make temporary column of gene_ids, and drop characters after the "."
+tmp=gsub("\\..*","",row.names(res))
+
+# map gene_ids
+res$symbol <- mapIds(org.Hs.eg.db, keys=tmp, column="SYMBOL", keytype="ENSEMBL", multiVals="first") 
+res$entrez <- mapIds(org.Hs.eg.db, keys=tmp, column="ENTREZID", keytype="ENSEMBL", multiVals="first")
+```
+
+
+
+
+Generate histograms of p-values for each gene (second plot filters out genes with low counts)
+```{r}
+hist(res$pvalue, col = "lavender", main = "Treatment vs Ctrl; Kallisto", xlab = "p-values")
+hist(res$pvalue[res$baseMean > 1], breaks = 0:20/20, col = "darkviolet", border = "white", 
+     main = "Treatment vs Ctrl for genes with count >1; Kallisto",
+     xlab = "p-values") #this one states that genes with average count <1 should not be included in the graph
+
+```
+
+
+
+
+```{r}
+### VOLCANO PLOTS
+with(res, plot(log2FoldChange, -log10(pvalue), pch=16, cex=1.5, main="Kallisto Volcano plot", xlim=c(-5,5)))
+with(subset(res, padj>0.01), points(log2FoldChange, -log10(pvalue), pch=16, cex=1.5, col="gray"))
+with(subset(res, padj<0.01 & log2FoldChange>0), points(log2FoldChange, -log10(pvalue), pch=16, cex=1.5, col="red"))
+with(subset(res, padj<0.01 & log2FoldChange<0), points(log2FoldChange, -log10(pvalue), pch=16, cex=1.5, col="blue"))
+### ADD BELLS AND WHISTLES
+pval = 0.01
+abline(h = -log10(pval), col = "black", lty = 2, lwd=4)
+mtext(paste("pval = 0.01", pval), side = 4, at = -log10(pval), cex = 0.8, line = 0.5, las = 1) 
+```
+
+
+```{r}
+### Plot heatmap - top20 variable genes
+rld <- rlog(processed_dataset)
+df <- as.data.frame(colData(processed_dataset))
+topVarGenes <- head( order( rowMeans( assay(rld) ), decreasing=TRUE ), 20 )
+mat <- assay(rld)[topVarGenes, ]
+mat<-mat-rowMeans(mat) ##plot distances from the mean, makes heatmap clearer
+mart <- useMart("ensembl","hsapiens_gene_ensembl") ## assuming human
+gns <- getBM(c("hgnc_symbol","ensembl_gene_id"), "ensembl_gene_id", row.names(mat), mart)
+row.names(mat)[match(gns[,2], row.names(mat))] <- gns[,1]
+pheatmap(mat, cluster_rows=TRUE, show_rownames=TRUE, cluster_cols=TRUE, annotation_col=df, main = "Kallisto Top 20 Variable Genes") 
+```
+
+
+
+
+```{r}
+### Plot heatmap - sorting by padj and log2fc
+# PICK ALL GENES WITH pADJ < 0.05 AND THEN SUBSET FOR THOSE WITH Log2FC > 1 THEN PICK TOP 25 HITS
+subset <- head((subset(res, res$log2FoldChange > 1 & res$padj < 0.00001)), n=25)  
+sigGenes <- rownames(subset)
+rows <- match(sigGenes, row.names(rld))
+mat <- assay(rld)[rows,]
+mat<-mat-rowMeans(mat) ##plot distances from the mean, makes heatmap clearer
+mart <- useMart("ensembl","hsapiens_gene_ensembl") ## assuming human
+gns <- getBM(attributes = c("hgnc_symbol","ensembl_gene_id", "external_gene_name"), filter = "ensembl_gene_id",
+             value=gsub("\\..*","",row.names(mat)), mart)
+row.names(mat) <- gsub("\\..*","",row.names(mat))
+row.names(mat)[match(gns[,2], row.names(mat))] <- gns[,1]
+df <- as.data.frame(colData(processed_dataset))
+row.names(mat) <- gsub("\\..*","",row.names(mat))
+pheatmap(mat, cluster_rows=TRUE, show_rownames=TRUE, cluster_cols=TRUE, annotation_col=df, 
+         main = "featureCounts top 25 genes by adjusted p-value and log2 transformation") 
+```
+
+PART 3: 
+
+There are definately differences in the outputs generated by featureCounts and Kallisto. They identified different genes as bearing differences acrosss the conditions and replicates, and generated slightly different MA and volcano plots etc. Additionally, a bit more variance is explained by PCA in the Kallisto generated DGE than featureCounts. However, I do know notice any distinct advantage of one approach over the other in this setting.
+
+However, there are distinct application specific reasons for selecting alignment-dependent (featureCounts) or alignment-independent (Kallisto) tools. Because mRNA sequences tend to be less unique than genomic DNA, alignment independent strategies (counts per transcript) tend to be less accurate, but they allow one to investigate splicing and other possible post-translational changes to the mRNA. 
+
+
