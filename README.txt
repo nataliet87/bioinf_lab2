@@ -1,7 +1,7 @@
 LAB2 PART I:
 
 Steps:
-1. completed in trimming.sh
+1. completed in trimming_lab2.sh
 
 2. completed in trimming.sh
 
